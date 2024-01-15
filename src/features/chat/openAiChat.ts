@@ -1,64 +1,72 @@
-import { Configuration, OpenAIApi } from "openai";
+import OpenAI from 'openai';
+//https://stackoverflow.com/questions/76917525/openai-api-error-module-openai-has-no-exported-member-configuration
+//import { Configuration, OpenAIApi } from "openai";
 import { Message } from "../messages/messages";
-
-import { WebClient } from '@slack/web-api';
-
-const fetch = require('node-fetch');
-
-// SlackのWebhook URLを設定
-const webhookUrl = 'your-slack-webhook-url';
+// .env ファイルから環境変数を読み込む
+import 'isomorphic-fetch';
 
 // Slackにメッセージを送信する関数
-async function sendSlackWebhookMessage(text) {
+async function sendSlackWebhookMessage(text: string) {
+  const webhookUrl = process.env.SLACK_WEBHOOK_URL;
+  if (!webhookUrl) {
+    console.error('Slack webhook URL is not defined');
+    return;
+  }
+
   try {
     await fetch(webhookUrl, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
       },
-      body: JSON.stringify({
-        text: text,
-      }),
+      body: JSON.stringify({ text }),
     });
   } catch (error) {
     console.error('Failed to send Slack webhook message:', error);
   }
 }
 
+interface ChatResponse {
+  message: string;
+}
 
-// Slack APIトークンとチャンネルIDを設定
-const slackToken = 'your-slack-api-token';
-const slackChannelId = 'your-slack-channel-id';
-
-export async function getChatResponse(messages: Message[], apiKey: string) {
+export async function getChatResponse(messages: Message[]): Promise<ChatResponse> {
+  const apiKey = process.env.OPENAI_API_KEY;
   if (!apiKey) {
     throw new Error("Invalid API Key");
   }
 
-  const configuration = new Configuration({
-    apiKey: apiKey,
+  const openai = new OpenAI({
+    apiKey: process.env.OPENAI_API_KEY,
   });
-  // ブラウザからAPIを叩くときに発生するエラーを無くすworkaround
-  // https://github.com/openai/openai-node/issues/6#issuecomment-1492814621
-  delete configuration.baseOptions.headers["User-Agent"];
-  const openai = new OpenAIApi(configuration);
+
+  let message = "エラーが発生しました"; // デフォルトメッセージを設定
 
   try {
-    const { data } = await openai.createChatCompletion({
+    const chatCompletion = await openai.chat.completions.create({
       model: "gpt-3.5-turbo",
       messages: messages,
     });
     // Slackに成功メッセージを送信
     await sendSlackWebhookMessage(`Chat response retrieved successfully`);
-    const [aiRes] = data.choices;
-    const message = aiRes.message?.content || "エラーが発生しました";
+    const [aiRes] = chatCompletion.choices;
+    if (aiRes.message?.content) {
+      message = aiRes.message.content;
+    }
   } catch (error) {
+    // エラーが Error インスタンスであるか確認
+    if (error instanceof Error) {
     // Slackにエラーメッセージを送信
-    await sendSlackMessage(`Error in getChatResponse: ${error.message}`);
-    throw error;
-  }
+      await sendSlackWebhookMessage(`Error in getChatResponse: ${error.message}`);
+    } else {
+      // error が Error インスタンスでない場合の処理
+      await sendSlackWebhookMessage(`Error in getChatResponse: An unknown error occurred`);
+    }
+      throw error;
+  }    
   return { message: message };
 }
+
 
 export async function getChatResponseStream(
   messages: Message[],
